@@ -1,0 +1,558 @@
+---
+title: "Simulation"
+author: "Yukai Yang"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=F, cache=T, warning=F)
+library(tidyverse)
+library(SMFilter)
+
+seed = 1
+```
+
+## Metric
+
+I choose the Frobenius distance between two matrices on the Stiefel manifold, which is
+
+\begin{eqnarray}
+d(X, Y) &=& || X - Y ||^2 = \mathrm{tr}\{ (X - Y)’ (X - Y) \} \nonumber\\
+&=& \mathrm{tr}\{ X’X + Y’Y - X’Y - Y’X \} \nonumber\\
+&=& 2 r - 2 tr\{ X’Y \}
+\end{eqnarray}
+due to the fact that $X'X = I_r$ and $Y'Y = I_r$. Thus, $d(X,Y) \in [0, 4r]$, and when $X=Y$, $d(X,Y)=0$, when $X=-Y$ (the furthest case), $d(X, Y) = 4r$.
+
+## What to report?
+
+We simulate the data from the model one and two based on different settings. Then we do the filtering and collect $U_t$ matrices, see Proposition 5.1-5.2. At time $t$, $U_{t-1}$ is the modal orientation of the predictive distribution and $U_{t}$ is the modal orientation of the updated distribution of the latent process.
+
+Next step we can compute the distances $d(U_t, \alpha_t)$ (model 1) and $d(U_t, \beta_t)$ (model 2). These numbers should be close to zero. But notice that they are not supposed to approach zero with the increase of the sample size $T$! The fact is that the filtering algorithms only give the conditional a posteriori distributions for the latent processes, and the modal orientation $U_t$ is not supposed to be consistent to the true ones. Like Kalman filter, they are just something like "conditional expectations" and the corresponding "conditional variance" is not shrinking.
+
+We can also try different initial values for the recursive filtering algorithms to see if the filtering allows for a wrong initial value (to what extent). The expectation is that, provided a wrong initial value, the sequence of $U_t$ should go back to its true value soon.
+
+
+## Simulation Design for model one
+
+We do not try different sample size $T$ as they are irrelevant to the accuracy of the estimates of the latent process due to Proposition 5.1-5.2.
+
+The dimenstion of the dependent variable will vary $p \in \{2, 10, 20\}$.
+
+The rank number will be $r \in \{1, 2\}$.
+
+The covariance matrix of the errors will be $\boldsymbol{\Omega} = \rho \boldsymbol{I}_p$, where $\rho \in \{1, 0.1\}$.
+
+The initial value for the filtering takes the value $\boldsymbol{\alpha}_0$ (the true value) and $-\boldsymbol{\alpha}_0$.
+
+The simulation model takes the form (1) and (16) without $\boldsymbol{Bz}_t$.
+
+$\boldsymbol{\beta} = (1, -1, ...)'/\sqrt{q_1}$ where $q_1 = 3$, $\boldsymbol{\alpha}_0 = (1, -1, ...)'/\sqrt{p}$
+
+The explanatory variable $\boldsymbol{x}_t$ is sampled from independent standard normal.
+
+
+### Different $p$ and $r$ with low and high $D$
+
+```{r setting1}
+iTT = c(100,300)
+ipp = c(2, 10, 20)
+irr = c(1, 2)
+iqx = 3
+iqz=0
+ik = 0
+Rho = c(1, .5, .1)
+vDD = c(5, 50, 500)
+method = 'min_1'
+
+ftmp <- function(ix){
+  mx1 = matrix(fil[ix+1,,],ip,ir)
+  mx2 = matrix(ra[ix,,],ip,ir)
+  return(FDist2(mx1,mx2))
+}
+
+if(ik==0) mY=NULL else mY = matrix(0, ik, ip)
+if(iqz==0) mZ=NULL else mZ = matrix(rnorm(iT*iqz),iT, iqz)
+```
+
+From Proposition 5.1, the dispersions of the predictive (a priori) and filtered (a posteriori) distributions of the latent processes are dominated by both the magnituede of the diagonals in matrix $D$ and the pair of dimensions $(p, r)$.
+
+In this experiment, we consider the setting
+$T = 100$, $r=1$, and $\rho=0.1$. For fixed $D=50$, we compare the filtering results via different values of dimension $p$.
+
+```{r pd1}
+# p with low D
+tmp_p1 = tibble()
+for(ip in ipp){
+  iT=iTT[1]; ir = irr[1]; rho=Rho[3]; vD=vDD[2] 
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  if(iqx==0) mX=NULL else mX = matrix(rnorm(iT*iqx),iT, iqx)
+  if(ip*ik+iqz==0) mB=NULL else mB = matrix(c(runif_sm(num=1,ip=(ip*ik+iqz)*ip,ir=1)), ip, ip*ik+iqz) 
+  alpha_0 = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel1(iT=iT, mX=mX, mZ=mZ, mY=mY, alpha_0=alpha_0, beta=beta, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel1(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, beta=beta, mB=mB, Omega=Omega, vD=vD, U0=alpha_0, method=method)
+  ra = ret$aAlpha
+  
+  tmp_p1 = bind_rows(tmp_p1, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("p=",ip)))
+}
+
+tmp_p1$p = factor(tmp_p1$p,levels=paste0("p=",ipp))
+# D = 50
+ggplot(tmp_p1) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b1, U )")
+```
+
+We see that, with the increase of the dimension, the results become more and more unstable. The results from the upper plot are acceptable as they are very close to zero, which implies that the filtered modal orientations are very close to the true values, and the corresponding dispersion is small enough.
+
+Now we consider the cases when $D = 500$.
+
+
+```{r pd2}
+# p with high D
+tmp_p2 = tibble()
+for(ip in ipp){
+  iT=iTT[1]; ir = irr[1]; rho=Rho[3]; vD=vDD[3] 
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  if(iqx==0) mX=NULL else mX = matrix(rnorm(iT*iqx),iT, iqx)
+  if(ip*ik+iqz==0) mB=NULL else mB = matrix(c(runif_sm(num=1,ip=(ip*ik+iqz)*ip,ir=1)), ip, ip*ik+iqz) 
+  alpha_0 = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel1(iT=iT, mX=mX, mZ=mZ, mY=mY, alpha_0=alpha_0, beta=beta, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel1(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, beta=beta, mB=mB, Omega=Omega, vD=vD, U0=alpha_0, method=method)
+  ra = ret$aAlpha
+  
+  tmp_p2 = bind_rows(tmp_p2, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("p=",ip)))
+}
+
+tmp_p2$p = factor(tmp_p2$p,levels=paste0("p=",ipp))
+# D = 500
+ggplot(tmp_p2) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b1, U )")
+```
+
+The results in the middle and lower plots show that modal orientations get closer to the true values as the dispersion becomes smaller.
+
+Then we turn to investigate the impact of the rank $r$ on the filtered distribution. In the following we use the setting $T = 100$, $\rho=0.1$ and $D=500$.
+
+```{r pr1}
+# p and r 1
+tmp_pr = tibble(); tname = NULL
+for(ip in c(3,10)) for(ir in irr){
+  iT=iTT[1]; rho=Rho[3]; vD=vDD[3] 
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  if(iqx==0) mX=NULL else mX = matrix(rnorm(iT*iqx),iT, iqx)
+  if(ip*ik+iqz==0) mB=NULL else mB = matrix(c(runif_sm(num=1,ip=(ip*ik+iqz)*ip,ir=1)), ip, ip*ik+iqz) 
+  alpha_0 = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel1(iT=iT, mX=mX, mZ=mZ, mY=mY, alpha_0=alpha_0, beta=beta, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel1(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, beta=beta, mB=mB, Omega=Omega, vD=vD, U0=alpha_0, method=method)
+  ra = ret$aAlpha
+  
+  tmp_pr = bind_rows(tmp_pr, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("p=",ip," r=",ir)))
+  tname = c(tname, paste0("p=",ip," r=",ir))
+}
+
+tmp_pr$p = factor(tmp_pr$p,levels=tname)
+# D = 500
+ggplot(tmp_pr) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b1, U )")
+```
+
+We see that the results in the case that $p=3$ and $r=2$ are not satisfactory as they look very stable around somwhere far from the true values, even though $r=2$ is small. The difference between $p$ and $r$ plays the role but not the magnitude of $r$.
+It can be seen that, when the dimensions of the orthonormal matrix move towards a square matrix, the Laplace method fails to approximate the integral as there is a clear bias with small dispersion.
+Similar phenomena appear in nonlinear extended Kalman filter methods when the finite order Taylor expansion cannot reliably capture the nonlinearity.
+The following case with $D=800$ shows that a bigger concentration $D$ is the remedy for this.
+
+```{r pr2}
+# p and r 2
+tmp_dr = tibble(); tname = NULL
+for(ir in irr){
+  ip=3; iT=iTT[1]; rho=Rho[3]; vD=800
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  if(iqx==0) mX=NULL else mX = matrix(rnorm(iT*iqx),iT, iqx)
+  if(ip*ik+iqz==0) mB=NULL else mB = matrix(c(runif_sm(num=1,ip=(ip*ik+iqz)*ip,ir=1)), ip, ip*ik+iqz) 
+  alpha_0 = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel1(iT=iT, mX=mX, mZ=mZ, mY=mY, alpha_0=alpha_0, beta=beta, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel1(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, beta=beta, mB=mB, Omega=Omega, vD=vD, U0=alpha_0, method=method)
+  ra = ret$aAlpha
+  
+  tmp_dr = bind_rows(tmp_dr, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("p=3, r=",ir)))
+  tname = c(tname, paste0("p=3, r=",ir))
+}
+
+tmp_dr$p = factor(tmp_dr$p,levels=tname)
+# D = 800
+ggplot(tmp_dr) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b1, U )")
+```
+
+
+The conclusion is that low dimeion $p$, large distance between $p$ and $r$, and big concentration $D$ improve the accuracy of the filtering algorithm.
+
+
+### The covariance matrix of the errors and the concentration
+
+From Proposition 5.1, we see that the filtered density may be dominated by the second term $\boldsymbol{C}_t' \boldsymbol{\alpha}_t$, or in other words, tends to be more like a matrix Langevin distribution, if $\boldsymbol{D}$ goes to infinity and $\boldsymbol{\Omega}$ goes to zeros. In the following, we see how the pair of $\boldsymbol{D}$ and $\boldsymbol{\Omega}$ affect the filtering results.
+
+The basic setting is $T = 100$, $p=2$, $r=1$. The first three plots are for the case $\rho=1$, the second three plots are for $\rho=.1$.
+
+
+```{r dr2}
+# low D with high rho
+tmp_d2 = tibble()
+for(vD in vDD){
+  iT=iTT[1]; ip=ipp[1]; ir = irr[1]; rho=Rho[1]
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  if(iqx==0) mX=NULL else mX = matrix(rnorm(iT*iqx),iT, iqx)
+  if(ip*ik+iqz==0) mB=NULL else mB = matrix(c(runif_sm(num=1,ip=(ip*ik+iqz)*ip,ir=1)), ip, ip*ik+iqz) 
+  alpha_0 = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel1(iT=iT, mX=mX, mZ=mZ, mY=mY, alpha_0=alpha_0, beta=beta, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel1(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, beta=beta, mB=mB, Omega=Omega, vD=vD, U0=alpha_0, method=method)
+  ra = ret$aAlpha
+  
+  tmp_d2 = bind_rows(tmp_d2, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("d=",vD)))
+}
+
+tmp_d2$p = factor(tmp_d2$p,levels=paste0("d=",vDD))
+# rho = 1
+ggplot(tmp_d2) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b1, U )")
+```
+
+
+```{r dr1}
+# high D with low rho
+tmp_d1 = tibble()
+for(vD in vDD){
+  iT=iTT[1]; ip=ipp[1]; ir = irr[1]; rho=Rho[3]
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  if(iqx==0) mX=NULL else mX = matrix(rnorm(iT*iqx),iT, iqx)
+  if(ip*ik+iqz==0) mB=NULL else mB = matrix(c(runif_sm(num=1,ip=(ip*ik+iqz)*ip,ir=1)), ip, ip*ik+iqz) 
+  alpha_0 = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel1(iT=iT, mX=mX, mZ=mZ, mY=mY, alpha_0=alpha_0, beta=beta, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel1(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, beta=beta, mB=mB, Omega=Omega, vD=vD, U0=alpha_0, method=method)
+  ra = ret$aAlpha
+  
+  tmp_d1 = bind_rows(tmp_d1, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("d=",vD)))
+}
+
+tmp_d1$p = factor(tmp_d1$p,levels=paste0("d=",vDD))
+# rho = .1
+ggplot(tmp_d1) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b1, U )")
+```
+
+We see that even for a small $D=5$, the results can be satisfactory with a small covarance matrix of the errors.
+
+
+### Wrong initial values
+
+Now we consider the setting $T = 100$, $r=1$, $\rho=0.1$ and $D=50$. In the following experiment, we look into the effect of wrongly specified initial values for the filtering algorithm. We choose the initial value $\boldsymbol{U}_0 = - \boldsymbol{\alpha}_0$ where $\boldsymbol{\alpha}_0$ is the true value, which cannot be worse as $-\boldsymbol{\alpha}_0$ is the furthest point away from $\boldsymbol{\alpha}_0$.
+
+```{r inival}
+# wrong initial value
+tmp_v = tibble()
+for(ip in ipp){
+  iT=iTT[1]; ir = irr[1]; rho=Rho[3]; vD=vDD[2] 
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  if(iqx==0) mX=NULL else mX = matrix(rnorm(iT*iqx),iT, iqx)
+  if(ip*ik+iqz==0) mB=NULL else mB = matrix(c(runif_sm(num=1,ip=(ip*ik+iqz)*ip,ir=1)), ip, ip*ik+iqz) 
+  alpha_0 = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel1(iT=iT, mX=mX, mZ=mZ, mY=mY, alpha_0=alpha_0, beta=beta, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel1(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, beta=beta, mB=mB, Omega=Omega, vD=vD, U0=-alpha_0, method=method)
+  ra = ret$aAlpha
+  
+  tmp_v = bind_rows(tmp_v, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("p=",ip)))
+}
+
+tmp_v$p = factor(tmp_v$p,levels=paste0("p=",ipp))
+# D = 50
+ggplot(tmp_v) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b1, U )")
+```
+
+We see that all of the three modal orientations go back to the correct position though the lowest plot is not stable due to the high dimension.
+
+
+## Simulation Design for model two
+
+We use the same settings as those of model one, but now $p=3$ and $q_1 \in \{2, 10, 20\}$.
+
+
+
+### Different $q_1$ and $r$ with low and high $D$
+
+In this experiment, we consider the setting
+$T = 100$, $r=1$, and $\rho=0.1$. For fixed $D=50$, we compare the filtering results via different values of dimension $q_1$.
+
+```{r setting2}
+iTT = c(100,300)
+ip = 3
+irr = c(1, 2)
+iqxx = c(2, 10, 20)
+iqz=0
+ik = 0
+Rho = c(1, .5, .1)
+vDD = c(5, 50, 500)
+method = 'min_1'
+
+ftmp <- function(ix){
+  mx1 = matrix(fil[ix+1,,],iqx,ir)
+  mx2 = matrix(ra[ix,,],iqx,ir)
+  return(FDist2(mx1,mx2))
+}
+
+if(ik==0) mY=NULL else mY = matrix(0, ik, ip)
+if(iqz==0) mZ=NULL else mZ = matrix(rnorm(iT*iqz),iT, iqz)
+mB = NULL
+```
+
+
+
+```{r qd1}
+# q with low D
+tmp_q1 = tibble()
+for(iqx in iqxx){
+  iT=iTT[1]; ir = irr[1]; rho=Rho[3]; vD=vDD[2] 
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  mX = matrix(rnorm(iT*iqx),iT, iqx)
+  alpha = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta_0 = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel2(iT=iT, mX=mX, mZ=mZ, mY=mY, beta_0=beta_0, alpha=alpha, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel2(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, alpha=alpha, mB=mB, Omega=Omega, vD=vD, U0=beta_0, method=method)
+  ra = ret$aBeta
+  
+  tmp_q1 = bind_rows(tmp_q1, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("q=",iqx)))
+}
+
+tmp_q1$p = factor(tmp_q1$p,levels=paste0("q=",iqxx))
+# D = 50
+ggplot(tmp_q1) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b2, U )")
+```
+
+
+Then we consider the cases when $D = 500$.
+
+
+```{r qd2}
+# q with high D
+tmp_q2 = tibble()
+for(iqx in iqxx){
+  iT=iTT[1]; ir = irr[1]; rho=Rho[3]; vD=vDD[3] 
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  mX = matrix(rnorm(iT*iqx),iT, iqx)
+  alpha = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta_0 = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel2(iT=iT, mX=mX, mZ=mZ, mY=mY, beta_0=beta_0, alpha=alpha, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel2(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, alpha=alpha, mB=mB, Omega=Omega, vD=vD, U0=beta_0, method=method)
+  ra = ret$aBeta
+  
+  tmp_q2 = bind_rows(tmp_q2, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("q=",iqx)))
+}
+
+tmp_q2$p = factor(tmp_q2$p,levels=paste0("q=",iqxx))
+# D = 500
+ggplot(tmp_q2) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b2, U )")
+```
+
+
+Then we turn to investigate the impact of the rank $r$ on the filtered distribution. In the following we use the setting $T = 100$, $\rho=0.1$ and $D=500$.
+
+
+```{r qr1}
+# q and r 1
+tmp_qr = tibble(); tname = NULL
+for(iqx in c(3,10)) for(ir in irr){
+  iT=iTT[1]; rho=Rho[3]; vD=vDD[3] 
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  mX = matrix(rnorm(iT*iqx),iT, iqx)
+  alpha = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta_0 = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel2(iT=iT, mX=mX, mZ=mZ, mY=mY, beta_0=beta_0, alpha=alpha, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel2(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, alpha=alpha, mB=mB, Omega=Omega, vD=vD, U0=beta_0, method=method)
+  ra = ret$aBeta
+  
+  tmp_qr = bind_rows(tmp_qr, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("q=",iqx," r=",ir)))
+  tname = c(tname, paste0("q=",iqx," r=",ir))
+}
+
+tmp_qr$p = factor(tmp_qr$p,levels=tname)
+# D = 500
+ggplot(tmp_qr) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b2, U )")
+```
+
+
+The following case with $D=800$ shows that a bigger concentration $D$ is the remedy for this.
+
+
+```{r qr2}
+# q and r 2
+tmp_dr = tibble(); tname = NULL
+for(ir in irr){
+  iqx=3; iT=iTT[1]; rho=Rho[3]; vD=800
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  mX = matrix(rnorm(iT*iqx),iT, iqx)
+  alpha = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta_0 = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel2(iT=iT, mX=mX, mZ=mZ, mY=mY, beta_0=beta_0, alpha=alpha, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel2(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, alpha=alpha, mB=mB, Omega=Omega, vD=vD, U0=beta_0, method=method)
+  ra = ret$aBeta
+  
+  tmp_dr = bind_rows(tmp_dr, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("q=3, r=",ir)))
+  tname = c(tname, paste0("q=3, r=",ir))
+}
+
+tmp_dr$p = factor(tmp_dr$p,levels=tname)
+# D = 800
+ggplot(tmp_dr) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b2, U )")
+```
+
+
+
+
+### The covariance matrix of the errors and the concentration
+
+The basic setting is $T = 100$, $q_1=2$, $r=1$. The first three plots are for the case $\rho=1$, the second three plots are for $\rho=.1$.
+
+
+```{r qdr2}
+# low D with high rho
+tmp_d2 = tibble()
+for(vD in vDD){
+  iT=iTT[1]; iqx=iqxx[1]; ir = irr[1]; rho=Rho[1]
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  mX = matrix(rnorm(iT*iqx),iT, iqx)
+  alpha = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta_0 = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel2(iT=iT, mX=mX, mZ=mZ, mY=mY, beta_0=beta_0, alpha=alpha, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel2(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, alpha=alpha, mB=mB, Omega=Omega, vD=vD, U0=beta_0, method=method)
+  ra = ret$aBeta
+  
+  tmp_d2 = bind_rows(tmp_d2, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("d=",vD)))
+}
+
+tmp_d2$p = factor(tmp_d2$p,levels=paste0("d=",vDD))
+# rho = 1
+ggplot(tmp_d2) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b2, U )")
+```
+
+
+
+```{r qdr1}
+# high D with low rho
+tmp_d1 = tibble()
+for(vD in vDD){
+  iT=iTT[1]; iqx=iqxx[1]; ir = irr[1]; rho=Rho[3]
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  mX = matrix(rnorm(iT*iqx),iT, iqx)
+  alpha = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta_0 = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel2(iT=iT, mX=mX, mZ=mZ, mY=mY, beta_0=beta_0, alpha=alpha, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel2(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, alpha=alpha, mB=mB, Omega=Omega, vD=vD, U0=beta_0, method=method)
+  ra = ret$aBeta
+  
+  tmp_d1 = bind_rows(tmp_d1, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("d=",vD)))
+}
+
+tmp_d1$p = factor(tmp_d1$p,levels=paste0("d=",vDD))
+# rho = .1
+ggplot(tmp_d1) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b2, U )")
+```
+
+
+
+### Wrong initial values
+
+Now we consider the setting $T = 100$, $r=1$, $\rho=0.1$ and $D=50$. In the following experiment, we look into the effect of wrongly specified initial values for the filtering algorithm. We choose the initial value $\boldsymbol{U}_0 = - \boldsymbol{\beta}_0$ where $\boldsymbol{\beta}_0$ is the true value, which cannot be worse as $-\boldsymbol{\beta}_0$ is the furthest point away from $\boldsymbol{\beta}_0$.
+
+```{r inivalq}
+# wrong initial value
+tmp_v = tibble()
+for(iqx in iqxx){
+  iT=iTT[1]; ir = irr[1]; rho=Rho[3]; vD=vDD[2] 
+  Omega = diag(ip)*rho
+  
+  set.seed(seed)
+  
+  mX = matrix(rnorm(iT*iqx),iT, iqx)
+  alpha = suppressWarnings(matrix(c(1,-1), ip, ir)/sqrt(ip))
+  beta_0 = suppressWarnings(matrix(c(1,-1), iqx, ir)/sqrt(iqx))
+  
+  ret = SimModel2(iT=iT, mX=mX, mZ=mZ, mY=mY, beta_0=beta_0, alpha=alpha, mB=mB, vD=vD, Omega=Omega) 
+  fil = FilterModel2(mY=as.matrix(ret$dData[,1:ip]), mX=mX, mZ=mZ, alpha=alpha, mB=mB, Omega=Omega, vD=vD, U0=-beta_0, method=method)
+  ra = ret$aBeta
+  
+  tmp_v = bind_rows(tmp_v, tibble(x=1:iT,d=sapply(1:iT,ftmp)/4/ir,p=paste0("q=",iqx)))
+}
+
+tmp_v$p = factor(tmp_v$p,levels=paste0("q=",iqxx))
+# D = 50
+ggplot(tmp_v) + geom_point(aes(x=x,y=d)) + facet_grid(rows = vars(p)) +
+  ylim(0, 1) + labs(x=paste0("t= 1, ...,",iT), y="normalized d( \u03b2, U )")
+```
+
