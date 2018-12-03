@@ -3,6 +3,8 @@ provides R codes and RMarkdown files for all the experiments in the paper "State
 
 Notice that you will have to install the package "SMFilter" before running the RMarkdown code. The package can be found
 
+[SMFilter@CRAN](https://CRAN.R-project.org/package=SMFilter)
+
 or on my GitHub
 
 https://github.com/yukai-yang/SMFilter
