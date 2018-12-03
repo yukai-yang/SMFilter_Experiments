@@ -1,7 +1,7 @@
 # SMFilter_Experiments
 provides R codes and RMarkdown files for all the experiments in the paper "State-Space Models on Stiefel Manifold with A New Approach to Nonlinear Filtering"
 
-Notice that you will have to install the package SMFilter before running the RMarkdown code. They can be found here
+Notice that you will have to install the package "SMFilter" before running the RMarkdown code. They can be found here
 
 https://github.com/yukai-yang/SMFilter
 
